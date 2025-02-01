@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Draw, Smudge, Fill & Export (with Line Width)</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    #controls {
+      margin-bottom: 10px;
+    }
+    #myCanvas {
+      border: 1px solid #ccc;
+      cursor: crosshair;
+      /* The canvas background remains transparent by default. */
+    }
+    .info {
+      margin-top: 1rem;
+      font-style: italic;
+      font-size: 0.9rem;
+      color: #666;
+    }
+    .label {
+      display: inline-block; 
+      width: 120px;
+      margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="controls">
+  <label>
+    <span class="label">Line Color:</span>
+    <input type="color" id="colorPicker" value="#00ff00">
+  </label>
+  <br><br>
+
+  <label>
+    <span class="label">Fill Color:</span>
+    <input type="color" id="fillColorPicker" value="#ff00ff">
+  </label>
+  <br><br>
+
+  <label>
+    <span class="label">Smoothing:</span>
+    <input type="range" id="smoothingRange" min="0" max="1" step="0.1" value="0.5">
+    <span id="smoothingValue">0.5</span>
+  </label>
+  <br><br>
+
+  <label>
+    <span class="label">Line Width:</span>
+    <input type="range" id="lineWidthSlider" min="0" max="100" step="1" value="3">
+    <span id="lineWidthValue">3</span> px
+  </label>
+  <br><br>
+
+  <label>
+    <input type="checkbox" id="smudgeMode">
+    Smudge Mode
+  </label>
+  <div id="smudgeControls" style="display: none; margin-top: 5px;">
+    <label>
+      <span class="label">Smudge Radius:</span>
+      <input type="range" id="smudgeRadius" min="5" max="100" step="5" value="40">
+      <span id="radiusValue">40</span> px
+    </label>
+    <br>
+    <label>
+      <span class="label">Smudge Strength:</span>
+      <input type="range" id="smudgeStrength" min="0.1" max="2" step="0.1" value="1">
+      <span id="strengthValue">1.0</span>
+    </label>
+  </div>
+  <br>
+
+  <label>
+    <input type="checkbox" id="fillToggle">
+    Fill Under The Line
+  </label>
+  <br><br>
+
+  <button id="exportBtn">Export PNG</button>
+</div>
+
+<canvas id="myCanvas" width="800" height="400"></canvas>
+
+<div class="info">
+  <p><strong>Instructions:</strong></p>
+  <ul>
+    <li><strong>Draw Mode</strong> (Smudge Mode OFF):  
+        Click and drag to draw a new freehand line.</li>
+    <li><strong>Smudge Mode</strong> (checkbox ON):  
+        Click and drag over the line to “push” or “pull” nearby segments of the line.</li>
+    <li><strong>Fill Under The Line</strong>:  
+        When turned on, the area below the curve is filled with the Fill Color, fully opaque, down to the bottom of the canvas.</li>
+    <li><strong>Line Width</strong>:  
+        Adjust the stroke thickness from 0–100px.</li>
+    <li><strong>Export PNG</strong>:  
+        Saves the canvas as a transparent PNG, so any unfilled area is fully transparent.</li>
+  </ul>
+</div>
+
+<script>
+// ------------------------------------------------
+// GLOBALS & INITIAL SETUP
+// ------------------------------------------------
+const canvas = document.getElementById('myCanvas');
+const ctx = canvas.getContext('2d');
+
+const colorPicker = document.getElementById('colorPicker');         // line color
+const fillColorPicker = document.getElementById('fillColorPicker'); // fill color
+const smoothingRange = document.getElementById('smoothingRange');
+const smoothingValue = document.getElementById('smoothingValue');
+const lineWidthSlider = document.getElementById('lineWidthSlider');
+const lineWidthValue = document.getElementById('lineWidthValue');
+
+const smudgeModeCheckbox = document.getElementById('smudgeMode');
+const fillToggleCheckbox = document.getElementById('fillToggle');
+const exportBtn = document.getElementById('exportBtn');
+
+const smudgeControls = document.getElementById('smudgeControls');
+const smudgeRadiusSlider = document.getElementById('smudgeRadius');
+const radiusValue = document.getElementById('radiusValue');
+const smudgeStrengthSlider = document.getElementById('smudgeStrength');
+const strengthValue = document.getElementById('strengthValue');
+
+let points = [];          // The points that make up our line
+let isDrawing = false;    // True while freehand drawing
+let isSmudging = false;   // True while smudging
+let oldMouse = { x: 0, y: 0 }; // Previous mouse position (used for smudging)
+
+// ------------------------------------------------
+// EVENT LISTENERS
+// ------------------------------------------------
+
+// Toggle smudge mode
+smudgeModeCheckbox.addEventListener('change', () => {
+  smudgeControls.style.display = smudgeModeCheckbox.checked ? 'block' : 'none';
+  isDrawing = false; // turn off drawing if we switch modes
+});
+
+// Toggle fill
+fillToggleCheckbox.addEventListener('change', drawEverything);
+
+// Color pickers & smoothing
+colorPicker.addEventListener('input', drawEverything);
+fillColorPicker.addEventListener('input', drawEverything);
+smoothingRange.addEventListener('input', () => {
+  smoothingValue.textContent = smoothingRange.value;
+  drawEverything();
+});
+
+// Line Width
+lineWidthSlider.addEventListener('input', () => {
+  lineWidthValue.textContent = lineWidthSlider.value;
+  drawEverything();
+});
+
+// Smudge controls
+smudgeRadiusSlider.addEventListener('input', () => {
+  radiusValue.textContent = smudgeRadiusSlider.value;
+});
+smudgeStrengthSlider.addEventListener('input', () => {
+  strengthValue.textContent = smudgeStrengthSlider.value;
+});
+
+// MOUSE DOWN
+canvas.addEventListener('mousedown', (e) => {
+  const { x, y } = getMousePos(e);
+  
+  if (smudgeModeCheckbox.checked) {
+    // Start smudging
+    isSmudging = true;
+    oldMouse = { x, y };
+  } else {
+    // Start drawing a new line
+    points = [];
+    points.push({ x, y });
+    isDrawing = true;
+  }
+});
+
+// MOUSE MOVE
+canvas.addEventListener('mousemove', (e) => {
+  const { x, y } = getMousePos(e);
+
+  if (isDrawing) {
+    // In drawing mode, continuously add points
+    points.push({ x, y });
+    drawEverything();
+  } else if (isSmudging) {
+    // In smudge mode, push points near the mouse
+    const dx = x - oldMouse.x;
+    const dy = y - oldMouse.y;
+    const radius = parseFloat(smudgeRadiusSlider.value);
+    const strength = parseFloat(smudgeStrengthSlider.value);
+
+    smudgePoints(x, y, dx, dy, radius, strength);
+    drawEverything();
+
+    // Update old mouse
+    oldMouse = { x, y };
+  }
+});
+
+// MOUSE UP or MOUSE OUT
+canvas.addEventListener('mouseup', () => {
+  isDrawing = false;
+  isSmudging = false;
+});
+canvas.addEventListener('mouseout', () => {
+  isDrawing = false;
+  isSmudging = false;
+});
+
+// Export button
+exportBtn.addEventListener('click', exportPNG);
+
+// ------------------------------------------------
+// DRAW FUNCTION
+// ------------------------------------------------
+function drawEverything() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  if (points.length < 2) return;
+
+  const tension = parseFloat(smoothingRange.value);
+  const strokeColor = colorPicker.value;
+  const fillColor = fillColorPicker.value;
+  const lineWidth = parseInt(lineWidthSlider.value, 10);
+
+  // Fill if toggled on
+  if (fillToggleCheckbox.checked) {
+    ctx.beginPath();
+    drawCardinalSpline(points, tension, /*moveToFirst*/ true);
+    // Extend path to bottom of canvas
+    ctx.lineTo(points[points.length - 1].x, canvas.height);
+    ctx.lineTo(points[0].x, canvas.height);
+    ctx.closePath();
+    // Opaque fill
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+  }
+
+  // Draw the line
+  ctx.beginPath();
+  drawCardinalSpline(points, tension, /*moveToFirst*/ true);
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+  ctx.closePath();
+}
+
+// ------------------------------------------------
+// SMUDGE LOGIC
+// ------------------------------------------------
+function smudgePoints(mouseX, mouseY, dx, dy, radius, strength) {
+  // For each point, if it's within 'radius' of the mouse, push it by (dx, dy) * factor
+  for (let i = 0; i < points.length; i++) {
+    const distX = points[i].x - mouseX;
+    const distY = points[i].y - mouseY;
+    const dist = Math.sqrt(distX * distX + distY * distY);
+
+    if (dist < radius) {
+      // Weight effect by distance (closer => more push)
+      const falloff = 1 - (dist / radius);
+      const pushFactor = falloff * strength;
+
+      points[i].x += dx * pushFactor;
+      points[i].y += dy * pushFactor;
+    }
+  }
+}
+
+// ------------------------------------------------
+// CARDINAL SPLINE HELPER
+// ------------------------------------------------
+function drawCardinalSpline(pts, tension, moveToFirst) {
+  if (pts.length < 2) return;
+
+  if (moveToFirst) {
+    ctx.moveTo(pts[0].x, pts[0].y);
+  } else {
+    ctx.lineTo(pts[0].x, pts[0].y);
+  }
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+
+    // Control points for the Bezier
+    const c1x = p1.x + (p2.x - p0.x) * (tension / 6);
+    const c1y = p1.y + (p2.y - p0.y) * (tension / 6);
+    const c2x = p2.x - (p3.x - p1.x) * (tension / 6);
+    const c2y = p2.y - (p3.y - p1.y) * (tension / 6);
+
+    ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
+  }
+}
+
+// ------------------------------------------------
+// EXPORT PNG (with transparency)
+// ------------------------------------------------
+function exportPNG() {
+  // Convert to Data URL
+  const dataURL = canvas.toDataURL('image/png');
+  // Create a temporary link to download
+  const link = document.createElement('a');
+  link.download = 'my_line_chart.png';
+  link.href = dataURL;
+  link.click();
+}
+
+// ------------------------------------------------
+// HELPER: GET MOUSE POSITION
+// ------------------------------------------------
+function getMousePos(evt) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: evt.clientX - rect.left,
+    y: evt.clientY - rect.top
+  };
+}
+</script>
+</body>
+</html>
